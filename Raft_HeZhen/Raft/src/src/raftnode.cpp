@@ -14,12 +14,16 @@
 #include <random>
 #include <string>
 #include <sstream>
+
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
 #include"tools.h"
 
 ThreadPool pool(THREAD_NUM);//线程池，用于work(回复收到的message)
 
 std::default_random_engine generator1;//计时器，follower
-std::uniform_int_distribution<int> distribution1(1000, 1001);//变化比较小，稳定
+std::uniform_int_distribution<int> distribution1(3000, 3001);//变化比较小，稳定
 int delay1;
 
 std::random_device rd;//真随机，竞争者的周期变化大，可以错开，避免所有node一直同时进入竞争者状态不给别人投票选不出leader
@@ -28,7 +32,7 @@ std::uniform_int_distribution<int> distribution2(500, 1000);
 int delay2;
 
 std::default_random_engine generator3;//计时器，leader
-std::uniform_int_distribution<int> distribution3(520, 521);//变化比较小，稳定
+std::uniform_int_distribution<int> distribution3(1520, 1521);//变化比较小，稳定
 int delay3;
 
 
@@ -215,7 +219,7 @@ void Node::LeaderLoop() {
         }
         else{
             live--;//活跃标志倒计（一共5*dealy3）
-            cout<<"heartbeat ------------------------------------------"<<endl;
+            //cout<<"heartbeat ------------------------------------------"<<endl;
         }
         
     }
@@ -292,9 +296,9 @@ void Node::work(int fd)
                 if(((log.latest_index()==recv_info.prev_log_index)&&(log.term_at(log.latest_index())==recv_info.prev_log_term)))//||(recv_info.prev_log_index==0)
                 {//follower节点的最新条目的索引和term与leader发过来的验证信息匹配，或者leader发现follower日志为空（或者全都不匹配）
                     int i=0;
-                    cout<<"follower "<<id<<" 响应leader "<<leader_id<<"同步请求: "<<endl;
-                    cout<<"ack:("<<ack<<") id:("<<id<<") 最新的条目索引 ("<<log.latest_index()<<") leader确认索引 ("<<recv_info.prev_log_index<<")"<<endl;
-                    cout<<"---------------------------------------------------------------------"<<endl;
+                    //cout<<"follower "<<id<<" 响应leader "<<leader_id<<"同步请求: "<<endl;
+                    //cout<<"ack:("<<ack<<") id:("<<id<<") 最新的条目索引 ("<<log.latest_index()<<") leader确认索引 ("<<recv_info.prev_log_index<<")"<<endl;
+                    //cout<<"---------------------------------------------------------------------"<<endl;
                     //cout<<recv_info.prev_log_index<<"+ "<<i+1<<": "<<recv_info.entries[i]<<endl;
                     while((i<3)&&(recv_info.entries[i][0]!='F'))//根据leader发送的条目进行更新(有效条目)
                     {
@@ -351,8 +355,8 @@ void Node::work(int fd)
             {
                 AppendResponse recv_info;
                 recv_info=getAppendResponse(message_recv);
-                cout<<recv_info.ack<<" "<<seq<<endl;
-                cout<<"get response from follower:"<<recv_info.follower_id<<endl;
+                //cout<<recv_info.ack<<" "<<seq<<endl;
+                //cout<<"get response from follower:"<<recv_info.follower_id<<endl;
                 if(recv_info.ack!=seq)return;
                 response_node_num++;
                 if(recv_info.term>current_term)current_term=recv_info.term;//如果follower的term比leader大。那么更新为大的term
@@ -387,111 +391,61 @@ void Node::work(int fd)
                 if(response_node_num>=num/2)live=5;//翻转leader沙漏
             }
         }
-        else if(type==clientresponse)//leader对follower（作为中转）传过来的客户请求的回应，leader->follower
-        {
-            ClientResponse recv_info;
-            recv_info=getClientResponse(message_recv);
-            int ret = send(recv_info.client_fd, &recv_info.message, sizeof(recv_info.message), 0);
-            if(ret!=-1)cout<<id<<" 成功响应客户端(follower)"<<": "<<recv_info.message<<endl;
-            //cout<<recv_info.fd<<endl;
-            //cout<<recv_info.message<<endl;
-        }
-        else if(type==clientrequest)//follower（作为中转）传给leader的客户请求，follower->leader
-        {
-            //cout<<"get a req from follower"<<endl;
-            while(state==CANDIDATE){//如果是竞争者，阻塞
-                
-            }
-            if(state==FOLLOWER){//这种情况是leader在接收到消息时变成了follower
-                while(leader_id==0){//还不知道leader的id，不能乱发，否则会越过数组范围，阻塞
-                    if(state==LEADER){
-                        goto leader_work1;//如果发现自己又变成leader了，执行leader的操作
-                    }
-                }
-                sendmsg(send_fd[fd_id(id,leader_id)],others_addr[fd_id(id,leader_id)],message_recv);//知道leader id（有效的）了，可以再转发给新的leader
-                //这里有一个巧妙的地方，新的leader会把消息返回给连接客户端的那个follwer，而不是第二或者更多次转发的follower，因为传递的message中的id号没变
-            }
-            else if(state==LEADER){
-
-            leader_work1:
-                while(log.committed_index()<log.latest_index())
-                {
-                    //如果还没提交过去的日志，那么阻塞等待，比如set后get，不等待set执行完后再get,会出错   
-                }
-                ClientRequest recv_info;
-                recv_info=getClientRequest(message_recv);
-                int NodeId=recv_info.node_id;//连接客户端的node的id
-                int ClientFd=recv_info.client_fd;//node连接客户端的套接字
-                string str(recv_info.message);
-                mtx_append.lock();
-                log.append(str,current_term);//提交日志
-                mtx_append.unlock();
-                std::vector<std::string> result = parse_string(str);//解析请求
-                //构造返回报文（->node connect to client)
-                ClientResponse res;
-                memset(res.message,0,sizeof(res.message));
-                res.client_fd=ClientFd;
-                res.node_id=NodeId;
-                string msg;
-                if(result[0]=="GET")
-                {
-                    cout<<"get a get ask(from follwer)"<<endl;
-                    msg=to_redis_string(kv.get(result[1]));
-                    if(kv.get(result[1])=="")msg="1\r\n$3\r\nnil\r\n";//找不到key对应的value，返回nil
-                    std::strcpy(res.message, msg.c_str());
-                }
-                else if(result[0]=="DEL")
-                {
-                    int count=0;
-                    for(int k=1;k<=static_cast<int>(result.size())-1;k++){//返回有效的删除数
-                        if(kv.get(result[k])!="")
-                            count++;
-                    }
-                    cout<<"get a del ask(leader)"<<endl;
-                    msg=":"+to_string(count)+"\r\n";
-                    std::strcpy(res.message, msg.c_str());
-                }
-                else if(result[0]=="SET")
-                {
-                    cout<<"get a set ask(from follwer)"<<endl;//返回ok就是
-                    msg="+OK\r\n";
-                    std::strcpy(res.message, msg.c_str());
-                }
-                while(log.committed_index()<log.latest_index()){//这段其实应该是必要的，为了快点响应就先注释了
-                    //确认提交了该条目才继续
-                }
-                Message res_msg=toMessage(clientresponse,&res,sizeof(res));
-                sendmsg(send_fd[fd_id(id,NodeId)],others_addr[fd_id(id,NodeId)],res_msg);
-            }
-        }
         else if(type==info){//客户端client的请求，client->leader（直接回应）|follower（中转）|candidate(fail)
-            string s=getString(message_recv);
-            cout<<id<<"收到"<<s<<endl;
-            while(state==CANDIDATE){//竞争者状态阻塞，不处理
+            cout<<message_recv.data<<endl;
+            Info json_info=getInfo(message_recv);
+            
+            string s=infoToRedisProtocol(json_info);
+            //cout<<id<<"收到"<<s<<endl;
 
+            if(state==CANDIDATE){//竞争者状态返回error
+                json response = {
+                    {"code", -1},
+                    {"value", "error1"}
+                };
+                // 将JSON对象转为字符串并添加换行符
+                string msg = response.dump() + "\r\n";
+                // 发送消息
+                int ret = send(fd, msg.c_str(), msg.size(), 0);
             }
             if(state==FOLLOWER)//client->follower
             {
-                delay3 = distribution3(generator3);
-                std::this_thread::sleep_for(std::chrono::milliseconds(delay3));//等一个心跳发送周期，确认leader有效，如果收到心跳，那么leader_id会是有效的，如果没收到，leader会被置为0（无效），然后被阻塞
-                while(leader_id==0){//还不知道leader的id，不能乱发，否则会越过数组范围
-                    if(state==LEADER){//如果变为leader了，处理该info
-                        goto leader_work2;
+                std::vector<std::string> result = parse_string(s);
+                if (result[0] == "GET") {
+                    cout << "get a get ask(leader)" << endl;
+                    string value = kv.get(result[1]);
+                    if(result[1]=="fleet_info"){
+                        json nodes = json::array();
+                        int fleet_leader_id=leader_id;
+                        nodes.push_back(json({{"id", json::array({1})}, {"ip", "115.157.197.178:8001"}}));
+                        nodes.push_back(json({{"id", json::array({2})}, {"ip", "115.157.197.178:8002"}}));
+                        nodes.push_back(json({{"id", json::array({3})}, {"ip", "115.157.197.178:8003"}}));
+
+                        json groups = json::array();
+                        groups.push_back(json({{"id", 1}, {"leader",fleet_leader_id}, {"nodes", json::array({1, 2, 3})}}));
+
+                        json originalJson = {
+                            {"nodes", nodes},
+                            {"fleetLeader", fleet_leader_id},
+                            {"groups", groups}
+                        };
+
+                        // 创建包含编码后 JSON 字符串的 JSON 对象
+                        json responseJson = {
+                            {"code", 1},
+                            {"value", originalJson.dump()}
+                        };
+                        string msg;
+                        msg = responseJson.dump() + "\r\n";
+                        int ret = send(fd, msg.c_str(), msg.size(), 0);
+                        if(ret!=-1)cout<<id<<" 成功响应客户端fleet_info请求 (follower)"<<": "<<msg<<endl;
                     }
                 }
-                //构造中转信息给leader
-                ClientRequest ask;
-                memset(ask.message,0,sizeof(ask.message));
-                ask.client_fd=fd;//告知fd，因为自己不保存
-                ask.node_id=id;//node id
-                std::strcpy(ask.message, s.c_str());
-                Message ask_msg=toMessage(clientrequest,&ask,sizeof(ask));
-                sendmsg(send_fd[fd_id(id,leader_id)],others_addr[fd_id(id,leader_id)],ask_msg);   
             }
             else if(state==LEADER){//client->leader
 
-            leader_work2:
-                cout<<"get a client ask(leader)"<<endl;
+            //leader_work2:
+                //cout<<"get a client ask(leader)"<<endl;
                 while(log.committed_index()<log.latest_index()){
                 
                 }
@@ -501,26 +455,59 @@ void Node::work(int fd)
                 std::vector<std::string> result = parse_string(s);
                 //cout<<result[0]<<endl;
                 string msg;
-                if(result[0]=="GET")
-                {
-                    cout<<"get a get ask(leader)"<<endl;
-                    msg=to_redis_string(kv.get(result[1]));
-                    if(kv.get(result[1])=="")msg="1\r\n$3\r\nnil\r\n";
-                }
-                else if(result[0]=="DEL")
-                {
-                    int count=0;
-                    for(int k=1;k<=static_cast<int>(result.size())-1;k++){
-                        if(kv.get(result[k])!="")
+                if (result[0] == "GET") {
+                    cout << "get a get ask(leader)" << endl;
+                    string value = kv.get(result[1]);
+                    if(result[1]=="fleet_info"){
+                        json nodes = json::array();
+                        int fleet_leader_id=id;
+                        nodes.push_back(json({{"id", json::array({1})}, {"ip", "115.157.197.178:8001"}}));
+                        nodes.push_back(json({{"id", json::array({2})}, {"ip", "115.157.197.178:8002"}}));
+                        nodes.push_back(json({{"id", json::array({3})}, {"ip", "115.157.197.178:8003"}}));
+
+                        json groups = json::array();
+                        groups.push_back(json({{"id", 1}, {"leader",fleet_leader_id}, {"nodes", json::array({1, 2, 3})}}));
+
+                        json originalJson = {
+                            {"nodes", nodes},
+                            {"fleetLeader", fleet_leader_id},
+                            {"groups", groups}
+                        };
+
+                        // 创建包含编码后 JSON 字符串的 JSON 对象
+                        json responseJson = {
+                            {"code", 1},
+                            {"value", originalJson.dump()}
+                        };
+                        msg = responseJson.dump() + "\r\n";
+                    }
+                    else if (value == "") {
+                        msg = json({
+                            {"code", 0},
+                            {"value", "nil"}
+                        }).dump() + "\r\n";
+                    } else {
+                        msg = json({
+                            {"code", 1},
+                            {"value", value}
+                        }).dump() + "\r\n";
+                    }
+                } else if (result[0] == "DEL") {
+                    int count = 0;
+                    for (int k = 1; k <= static_cast<int>(result.size()) - 1; k++) {
+                        if (kv.get(result[k]) != "")
                             count++;
                     }
-                    cout<<"get a del ask(leader)"<<endl;
-                    msg=":"+to_string(count)+"\r\n";
-                }
-                else if(result[0]=="SET")
-                {
-                    cout<<"get a set ask(leader)"<<endl;
-                    msg="+OK\r\n";
+                    cout << "get a del ask(leader)" << endl;
+                    msg = json({
+                        {"code", count}
+                    }).dump() + "\r\n";
+                } else if (result[0] == "SET") {
+                    cout << "get a set ask(leader)" << endl;
+                    msg = json({
+                        {"code", 1},
+                        {"value", ""}
+                    }).dump() + "\r\n";
                 }
                 while(log.committed_index()<log.latest_index()){
                     //请求被提交了才返回信息给客户端
@@ -627,9 +614,15 @@ void Node::accept_connections() {
         for (int i = 0 ; i < wait_count; i++) {
             uint32_t events = event[i].events;
             int __result;
-            if ( events & EPOLLERR || events & EPOLLHUP || ((!events) & EPOLLIN)) {
-                printf("Epoll has error\n");
-                close (event[i].data.fd);
+            if (events & EPOLLERR) {
+                // 发生错误
+                printf("Epoll error on fd %d\n", event[i].data.fd);
+                close(event[i].data.fd);
+                continue;
+            } else if (events & EPOLLHUP) {
+                // 挂起，可能是对端关闭连接
+                printf("Epoll hang-up on fd %d\n", event[i].data.fd);
+                close(event[i].data.fd);
                 continue;
             } else if (listenfd == event[i].data.fd) {
                 // listen的 file describe 事件触发， accpet事件
@@ -653,6 +646,7 @@ void Node::accept_connections() {
                     return ;
                 }
             } else {//收到消息，使用work来对应处理收到的信息
+                //<<"recv info---"<<endl;
                 int fd=event[i].data.fd;
                 pool.enqueue([this,fd] {
                     work(fd);

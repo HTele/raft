@@ -16,6 +16,7 @@
 #include <string>
 #include <sstream>
 
+
 //一个转换函数，把自己id(x)发送给其他节点在send_fd的index(y)时转换为自己在对应节点地send_fd里的index，只适用于port（id）是连号的情况
 int turn_id(int x,int y){
     if(y+1<x)return x-2;
@@ -80,5 +81,26 @@ std::string to_redis_string(const std::string& str) {
     result = "*" + std::to_string(count) + "\r\n" + result; // 参数数量
     return result;
 }
+
+std::string infoToRedisProtocol(const Info& info) {
+    std::ostringstream oss;
+    /*if (std::strcmp(info.key, "get") != 0 || std::strcmp(info.value, "fleet_info") != 0) {
+        std::cout << "解析字符" << std::endl;
+        std::cout << info.key << std::endl << info.value << std::endl << info.method << std::endl
+                  << info.hashKey << std::endl << info.groupId << std::endl;
+        std::cout << " ---------222---------  " << std::endl;
+    }*/
+    // 计算命令中的总元素数（这里是 4：命令名、键、值）
+    oss << "*" << 3 << "\r\n";
+    // 添加命令（SET、GET 等）
+    oss << "$" << std::strlen(info.method) << "\r\n" << info.method << "\r\n";
+    // 添加键
+    oss << "$" << std::strlen(info.key) << "\r\n" << info.key << "\r\n";
+    // 添加值
+    oss << "$" << std::strlen(info.value) << "\r\n" << info.value << "\r\n";
+    return oss.str();
+}
+
+
 
 #endif

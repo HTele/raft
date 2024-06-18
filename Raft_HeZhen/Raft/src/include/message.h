@@ -59,7 +59,6 @@ struct Message {
 };
 
 
-
 struct RequestVote {
     int term;
     int candidate_id;
@@ -120,7 +119,13 @@ struct ClientRequest{
     char message[100];
 };
 
-
+struct Info {
+    char key[100];
+    char value[100];
+    char method[100];
+    uint64_t hashKey;
+    int groupId;
+};
 
 
 // 将特定类型的数据转换为 Message 数据
@@ -149,6 +154,9 @@ AppendResponse getAppendResponse(const Message& message) ;
 ClientResponse getClientResponse(const Message& message) ;
 
 ClientRequest getClientRequest(const Message& message) ;
+
+
+Info getInfo(const Message& message);
 
 string getString(const Message& message) ;
 

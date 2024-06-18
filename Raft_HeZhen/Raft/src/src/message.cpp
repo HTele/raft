@@ -2,6 +2,11 @@
 #include <netinet/tcp.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <nlohmann/json.hpp>
+#include <cstring> // For strcpy
+
+
+using json = nlohmann::json;
 Message toMessage(MessageType type, void* data, size_t size) {
     Message message;
     message.type = type;
@@ -51,6 +56,11 @@ ClientRequest getClientRequest(const Message& message) {
     return clientRequest;
 }
 
+Info getInfo(const Message& message){
+    Info json_info;
+    json_info=*reinterpret_cast<const Info*>(message.data);
+    return json_info;
+}
 
 
 string getString(const Message& message) {
@@ -100,10 +110,45 @@ int sendMessage(int sockfd,Message message) {
     return 1; // 成功发送所有数据
 }
 
+
 union Data {
     Message message;
     char stringData[sizeof(Message)];
 };
+
+
+
+
+bool parseJsonToInfo(const std::string& jsonStr, Info& info) {
+    try {
+        auto j = nlohmann::json::parse(jsonStr);
+        
+        // Copy values to char arrays
+        std::strncpy(info.key, j.at("key").get<std::string>().c_str(), sizeof(info.key) - 1);
+        info.key[sizeof(info.key) - 1] = '\0'; // Ensure null-termination
+        
+        std::strncpy(info.value, j.at("value").get<std::string>().c_str(), sizeof(info.value) - 1);
+        info.value[sizeof(info.value) - 1] = '\0'; // Ensure null-termination
+        
+        std::strncpy(info.method, j.at("method").get<std::string>().c_str(), sizeof(info.method) - 1);
+        info.method[sizeof(info.method) - 1] = '\0'; // Ensure null-termination
+        
+        info.hashKey = j.at("hashKey").get<uint64_t>();
+        info.groupId = j.at("groupId").get<int>();
+        
+        /*if (std::strcmp(info.key, "get") != 0 || std::strcmp(info.value, "fleet_info") != 0) {
+            std::cout << "接收json " << jsonStr << std::endl;
+            std::cout << info.key << std::endl << info.value << std::endl << info.method << std::endl
+                      << info.hashKey << std::endl << info.groupId << std::endl;
+            std::cout << " -----------111-----------  " << std::endl;
+        }*/
+        
+        return true;
+    } catch (const std::exception& e) {
+        // Handle errors (e.g., log them)
+        return false;
+    }
+}
 
 int recvMessage(int sockfd, Message& message) {
     if (sockfd == -1) {
@@ -142,19 +187,18 @@ int recvMessage(int sockfd, Message& message) {
     }
 
     // 判断接收到的数据长度
-    if (total_received >= static_cast<int>(sizeof(Message))) {
+    if (total_received == static_cast<int>(sizeof(Message))) {
         // 如果接收到的数据长度大于等于 Message 结构体的大小
         message = data.message;
     } else {
-        // 如果接收到的数据长度小于 Message 结构体的大小，认为是字符串
-        message.type = info;
-        std::string str(data.stringData, total_received); // 使用接收到的实际字节数构造字符串
-        message.data[0] = '\0'; // 清空数据字段
-        str.copy(message.data, sizeof(message.data) - 1); // 复制最多 99 个字符，保留一个空位用于终止符
-        message.data[sizeof(message.data) - 1] = '\0'; // 确保以空字符终止
+        cout<<"receive json"<<endl;
+        std::string jsonStr(data.stringData, total_received); // 使用接收到的实际字节数构造字符串
+        Info json_info;
+        if (parseJsonToInfo(jsonStr, json_info)) {
+            // JSON 解析成功
+            message=toMessage(info,&json_info,sizeof(json_info));
+        }
     }
-
     memset(data.stringData, 0, sizeof(data.stringData));
-
     return 1;
 }
